@@ -70,3 +70,26 @@ def test_save_manifest_and_error_methods(tmp_path: Path) -> None:
     crawler.write_errors_header()
     assert (tmp_path / "output" / "manifest.csv").exists()
     assert (tmp_path / "output" / "errors.csv").exists()
+
+
+def test_resume_uses_next_free_page_number(tmp_path: Path) -> None:
+    pages_dir = tmp_path / "output" / "pages"
+    pages_dir.mkdir(parents=True)
+    (pages_dir / "1.html").write_text("x", encoding="utf-8")
+    (pages_dir / "2.html").write_text("y", encoding="utf-8")
+
+    crawler = Crawler(base_dir=tmp_path)
+    assert crawler.next_file_name() == "3.html"
+
+
+def test_resume_keeps_seen_urls_and_queue_state(tmp_path: Path) -> None:
+    crawler = Crawler(base_dir=tmp_path)
+    crawler.frontier.enqueue("https://esam.ir/about")
+    crawler.frontier.enqueue("https://esam.ir/about")
+    crawler._save_state()
+
+    resumed = Crawler(base_dir=tmp_path)
+    queued = list(resumed.frontier.queue)
+    assert len(queued) == len(set(queued))
+    assert queued.count("https://esam.ir/about") == 1
+    assert "https://esam.ir/about" in resumed.frontier.seen

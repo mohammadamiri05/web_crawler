@@ -8,6 +8,7 @@ PAGES_DIR = OUTPUT_DIR / "pages"
 MANIFEST_PATH = OUTPUT_DIR / "manifest.csv"
 ERRORS_PATH = OUTPUT_DIR / "errors.csv"
 RESULT_PATH = BASE_DIR / "result.txt"
+STATE_PATH = BASE_DIR / "crawl_state.json"
 
 SEED_URL = "https://esam.ir/"
 TARGET_PAGES = 10_000

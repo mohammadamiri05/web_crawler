@@ -153,11 +153,12 @@ class Crawler:
         self.manifest_path = self.output_dir / "manifest.csv"
         self.errors_path = self.output_dir / "errors.csv"
         self.result_path = self.base_dir / "result.txt"
+        self.state_path = self.base_dir / "crawl_state.json"
 
         self.output_dir.mkdir(parents=True, exist_ok=True)
         self.pages_dir.mkdir(parents=True, exist_ok=True)
 
-        self.frontier = URLFrontier.from_seed(config.SEED_URL)
+        self.frontier = URLFrontier()
         self.successful_html_pages = 0
         self.total_urls_enqueued = 0
         self.unique_urls_scheduled = 0
@@ -186,9 +187,116 @@ class Crawler:
         self.manifest_rows: list[dict[str, Any]] = []
         self.next_file_index = self._detect_next_file_index()
 
+        self._load_manifest_rows()
+        self._restore_state()
+
         self.write_manifest_header()
         self.write_errors_header()
         self.write_result()
+
+    def _load_manifest_rows(self) -> None:
+        if not self.manifest_path.exists():
+            return
+        with self.manifest_path.open("r", encoding="utf-8", newline="") as handle:
+            reader = csv.DictReader(handle)
+            for row in reader:
+                file_name = (row.get("file_name") or "").strip()
+                requested_url = (row.get("requested_url") or "").strip()
+                final_url = (row.get("final_url") or "").strip()
+                if file_name:
+                    self.manifest_rows.append(row)
+                    if final_url:
+                        self.frontier.seen.add(final_url)
+                    if requested_url:
+                        self.frontier.seen.add(requested_url)
+                if file_name and file_name.endswith(".html") and file_name not in {"", "N/A"}:
+                    numeric_name = file_name.rsplit(".", 1)[0]
+                    if numeric_name.isdigit():
+                        self.next_file_index = max(self.next_file_index, int(numeric_name) + 1)
+
+    def _already_saved_url(self, url: str | None) -> bool:
+        if not url:
+            return False
+        for row in self.manifest_rows:
+            if (row.get("requested_url") == url) or (row.get("final_url") == url):
+                return True
+        return False
+
+    def _restore_state(self) -> None:
+        if not self.state_path.exists():
+            if not self.frontier.seen:
+                self.frontier.enqueue(config.SEED_URL)
+            return
+        try:
+            with self.state_path.open("r", encoding="utf-8") as handle:
+                data = json.load(handle)
+        except (json.JSONDecodeError, OSError):
+            self.frontier.enqueue(config.SEED_URL)
+            return
+
+        queue = data.get("queue", [])
+        seen = set(data.get("seen", []))
+        self.frontier = URLFrontier()
+        self.frontier.queue = deque(queue)
+        self.frontier.seen = seen
+        self.frontier.state = data.get("state", {})
+
+        self.successful_html_pages = int(data.get("successful_html_pages", 0))
+        self.total_urls_enqueued = int(data.get("total_urls_enqueued", 0))
+        self.unique_urls_scheduled = int(data.get("unique_urls_scheduled", 0))
+        self.links_extracted_total = int(data.get("links_extracted_total", 0))
+        self.duplicate_urls_skipped = int(data.get("duplicate_urls_skipped", 0))
+        self.domain_rejected = int(data.get("domain_rejected", 0))
+        self.robots_rejected = int(data.get("robots_rejected", 0))
+        self.processed_urls = int(data.get("processed_urls", 0))
+        self.http_success = int(data.get("http_success", 0))
+        self.http_errors = int(data.get("http_errors", 0))
+        self.network_errors = int(data.get("network_errors", 0))
+        self.non_html_responses = int(data.get("non_html_responses", 0))
+        self.redirects = int(data.get("redirects", 0))
+        self.parser_errors = int(data.get("parser_errors", 0))
+        self.storage_errors = int(data.get("storage_errors", 0))
+        self.total_errors = int(data.get("total_errors", 0))
+        self.output_size_bytes = int(data.get("output_size_bytes", 0))
+        self.current_url = data.get("current_url", "")
+        self.status = data.get("status", "RUNNING")
+        self.last_error = data.get("last_error", "N/A")
+        self.notes = list(data.get("notes", []))
+        self.challenges = list(data.get("challenges", []))
+
+        if not self.frontier.queue:
+            self.frontier.enqueue(config.SEED_URL)
+
+    def _save_state(self) -> None:
+        state = {
+            "queue": list(self.frontier.queue),
+            "seen": sorted(self.frontier.seen),
+            "state": self.frontier.state,
+            "successful_html_pages": self.successful_html_pages,
+            "total_urls_enqueued": self.total_urls_enqueued,
+            "unique_urls_scheduled": self.unique_urls_scheduled,
+            "links_extracted_total": self.links_extracted_total,
+            "duplicate_urls_skipped": self.duplicate_urls_skipped,
+            "domain_rejected": self.domain_rejected,
+            "robots_rejected": self.robots_rejected,
+            "processed_urls": self.processed_urls,
+            "http_success": self.http_success,
+            "http_errors": self.http_errors,
+            "network_errors": self.network_errors,
+            "non_html_responses": self.non_html_responses,
+            "redirects": self.redirects,
+            "parser_errors": self.parser_errors,
+            "storage_errors": self.storage_errors,
+            "total_errors": self.total_errors,
+            "output_size_bytes": self.output_size_bytes,
+            "current_url": self.current_url,
+            "status": self.status,
+            "last_error": self.last_error,
+            "notes": self.notes,
+            "challenges": self.challenges,
+        }
+        with self.state_path.open("w", encoding="utf-8") as handle:
+            json.dump(state, handle, ensure_ascii=False, indent=2)
 
     def _detect_next_file_index(self) -> int:
         existing_numbers = []
@@ -237,6 +345,8 @@ class Crawler:
             writer.writerow([timestamp, url, error_type, status_code or "", message])
 
     def register_manifest(self, file_name: str, requested_url: str, final_url: str, status_code: int, content_type: str, size_bytes: int, depth: int, sha256: str) -> None:
+        if self._already_saved_url(requested_url) or self._already_saved_url(final_url):
+            return
         row = {
             "file_name": file_name,
             "requested_url": requested_url,
@@ -321,6 +431,10 @@ class Crawler:
             return False, final_url, content_type, response.status_code, None, None
 
         self.http_success += 1
+        if self._already_saved_url(final_url) or self._already_saved_url(url):
+            self.notes.append(f"Skipped duplicate page already in manifest: {final_url}")
+            return False, final_url, content_type, response.status_code, None, None
+
         html = response.text
         file_name = self.next_file_name()
         file_path = self.pages_dir / file_name
@@ -336,6 +450,7 @@ class Crawler:
         self.output_size_bytes += byte_size
         self.successful_html_pages += 1
         self.register_manifest(file_name, url, final_url, response.status_code, content_type, byte_size, depth, sha256)
+        self._save_state()
         return True, final_url, content_type, response.status_code, html, byte_size
 
     def fetch_and_parse(self, url: str, depth: int = 0) -> list[str]:
@@ -358,6 +473,7 @@ class Crawler:
                         self.duplicate_urls_skipped += 1
                 else:
                     self.domain_rejected += 1
+            self._save_state()
             return links
         except Exception:
             self.parser_errors += 1
@@ -448,6 +564,7 @@ class Crawler:
             f"Notes / limitations: {all_metrics['notes']}",
         ]
         self.result_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+        self._save_state()
 
     @staticmethod
     def format_bytes(value: int) -> str:
@@ -476,6 +593,8 @@ class Crawler:
 
             time.sleep(config.REQUEST_DELAY_SECONDS)
 
+        self._save_state()
+
         if self.successful_html_pages >= deadline:
             self.status = "COMPLETED"
             self.queue_length_at_end = len(self.frontier)
@@ -500,7 +619,7 @@ def main() -> None:
     args = parser.parse_args()
 
     crawler = Crawler()
-    if args.seed:
+    if args.seed and not crawler.state_path.exists():
         crawler.frontier = URLFrontier.from_seed(args.seed)
     crawler.run(max_pages=args.max_pages)
 

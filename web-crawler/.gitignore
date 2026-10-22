@@ -11,6 +11,7 @@ __pycache__/
 output/pages/
 output/*.csv
 result.txt
+crawl_state.json
 
 # Secrets / local settings
 .env
