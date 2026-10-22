@@ -22,3 +22,8 @@ result.txt
 .vscode/
 .DS_Store
 Thumbs.db
+
+# about project documentation
+*.pdf
+web_crawler_agent_prompt_en.md
+web_crawler_agent_prompt.md
