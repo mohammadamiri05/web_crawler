@@ -25,5 +25,6 @@ Thumbs.db
 
 # about project documentation
 *.pdf
+prompt/
 web_crawler_agent_prompt_en.md
 web_crawler_agent_prompt.md
