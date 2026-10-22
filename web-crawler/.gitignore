@@ -1,0 +1,24 @@
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Python cache
+__pycache__/
+*.py[cod]
+
+# Crawl output (keep local, do not commit)
+output/pages/
+output/*.csv
+result.txt
+
+# Secrets / local settings
+.env
+.env.*
+*.key
+*.pem
+
+# Editor / OS
+.vscode/
+.DS_Store
+Thumbs.db
